@@ -1,20 +1,13 @@
 #!/usr/bin/python3
+import configparser
+import json
 import os
+import shutil
+from pathlib import Path
 
 import requests
 from bs4 import BeautifulSoup
 
-
-class Config():
-    def __init__(self):
-        self.hostname = "https://partitioncloud.com"
-        self.username = "username"
-        self.password = "password"
-        self.albums = [
-            "f4ab565d-4fa7-43a0-8597-6cf1310af95c",
-            "7fc34b40-445f-4678-91cb-f5be6932f6e8"
-        ]
-        self.storage_path = "/home/my-user/Documents/partitioncloud-files"
 
 class Session():
     def __init__(self, hostname):
@@ -29,7 +22,7 @@ class Session():
             "password": password
         }
         r = self.req_session.post(f"{self.host}/auth/login", data)
-        if str(r) != "<Response [200]>":
+        if "<title>Se connecter - PartitionCloud</title>" in r.text:
             raise BaseException("Invalid username/ password")
 
     def get_albums(self):
@@ -94,18 +87,37 @@ class Partition():
 
 
 def update_all(config):
-    os.makedirs(config.storage_path, exist_ok=True)
-    session = Session(config.hostname)
-    session.login(config.username, config.password)
-    albums = session.get_albums()
-    albums.extend([Album(i, None, config.hostname) for i in config.albums])
+    os.makedirs(config["STORAGE"]["storage-path"], exist_ok=True)
+    session = Session(config["SERVER"]["hostname"])
+
+    if config["AUTH"]["username"] != "" and config["AUTH"]["username"] is not None:
+        session.login(config["AUTH"]["username"], config["AUTH"]["password"])
+        albums = session.get_albums()
+    else:
+        albums = []
+
+    albums.extend([Album(i, None, config["SERVER"]["hostname"]) for i in json.loads(config["AUTH"]["albums"])])
+
     for album in albums:
         album.load_partitions(session.req_session)
-        album.update(config.storage_path, session.req_session)
+        album.update(config["STORAGE"]["storage-path"], session.req_session)
 
 
 
+def __main__():
+    home = str(Path.home())
+    config = configparser.ConfigParser()
+    config_file = os.path.join(home, ".partitioncloud-config")
+
+    if not os.path.exists(config_file):
+        shutil.copyfile(".partitioncloud-config.sample", config_file)
+        print(f"No config file was found, copying default to {config_file}")
+        print("Modify it for your needs and relaunch this script")
+        exit(1)
+    
+    config.read(config_file)
+    update_all(config)
 
 
-config = Config()
-update_all(config)
+if __name__ == "__main__":
+    __main__()
