@@ -9,6 +9,9 @@ import requests
 from bs4 import BeautifulSoup
 
 
+def file_safe_string(s):
+    return "".join([c for c in s if c.isdigit() or c.isalpha() or c == " " or c == "-"]).strip()
+
 class Session():
     def __init__(self, hostname):
         self.req_session = requests.Session()
@@ -35,7 +38,7 @@ class Session():
 class Album():
     def __init__(self, id, name, host):
         self.id = id
-        self.name = name
+        self.name = file_safe_string(name)
         self.host = host
         self.partitions = []
 
@@ -43,7 +46,7 @@ class Album():
         r = req_session.get(f"{self.host}/albums/{self.id}")
         soup = BeautifulSoup(r.content, "html.parser")
         if self.name is None:
-            self.name = soup.find("header").find("h1").text.strip()
+            self.name = file_safe_string(soup.find("header").find("h1").text.strip())
 
         a = soup.find("div", {"id": "partitions-grid"}).find_all("a")
 
@@ -82,7 +85,7 @@ class Partition():
     def __repr__(self):
         if self.author != "":
             return f"{self.name} - {self.author}"
-        return self.name
+        return file_safe_string(self.name)
 
 
 
