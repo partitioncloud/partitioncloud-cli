@@ -3,6 +3,7 @@ import configparser
 import json
 import os
 import shutil
+import re
 from pathlib import Path
 
 import requests
@@ -51,10 +52,12 @@ class Album():
         a = soup.find("div", {"id": "partitions-grid"}).find_all("a")
 
         for partition_div in a:
-            id = partition_div["href"].split("/")[-1]
-            author = partition_div.find("div", {"class": "partition-author"}).text.strip()
-            name = partition_div.find("div", {"class": "partition-name"}).text.strip()
-            self.partitions.append(Partition(id, author, name, self))
+            regexp = re.compile(r'\/partition\/[0-9A-Za-z\-]*\/edit')
+            if not regexp.search(partition_div["href"]):
+                id = partition_div["href"].split("/")[-1]
+                name = partition_div.find("div", {"class": "partition-name"}).text.strip()
+                author = partition_div.find("div", {"class": "partition-author"}).text.strip()
+                self.partitions.append(Partition(id, author, name, self))
 
     def update(self, storage_path, req_session):
         os.makedirs(os.path.join(storage_path, self.name), exist_ok=True)
