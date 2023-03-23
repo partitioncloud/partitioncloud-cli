@@ -39,9 +39,13 @@ class Session():
 class Album():
     def __init__(self, id, name, host):
         self.id = id
-        self.name = file_safe_string(name)
         self.host = host
         self.partitions = []
+        if name is not None:
+            # Will else be loaded in `self.load_partitions()`
+            self.name = file_safe_string(name)
+        else:
+            self.name = None
 
     def load_partitions(self, req_session):
         r = req_session.get(f"{self.host}/albums/{self.id}")
