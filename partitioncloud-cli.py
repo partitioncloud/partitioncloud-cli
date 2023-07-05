@@ -33,7 +33,7 @@ class Session():
         r = self.req_session.get(f"{self.host}/albums")
         soup = BeautifulSoup(r.content, "html.parser")
         a = soup.find("section", {"id": "albums"}).find_all("a")
-        return [Album(i["href"], i.text.strip(), self.host) for i in a]
+        return [Album(i["href"].split("/")[-1], i.text.strip(), self.host) for i in a]
 
 
 class Album():
@@ -51,9 +51,9 @@ class Album():
         r = req_session.get(f"{self.host}/albums/{self.id}")
         soup = BeautifulSoup(r.content, "html.parser")
         if self.name is None:
-            self.name = file_safe_string(soup.find("header").find("h1").text.strip())
+            self.name = file_safe_string(soup.find("h2", {"id": "album-title"}).text.strip())
 
-        a = soup.find("div", {"id": "partitions-grid"}).find_all("a")
+        a = soup.find("section", {"id": "partitions-grid"}).find_all("a")
 
         for partition_div in a:
             regexp = re.compile(r'\/partition\/[0-9A-Za-z\-]*\/edit')
