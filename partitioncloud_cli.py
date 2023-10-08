@@ -1,5 +1,6 @@
 #!/usr/bin/python3
 import configparser
+import argparse
 import json
 import os
 import shutil
@@ -13,12 +14,15 @@ from bs4 import BeautifulSoup
 def file_safe_string(s):
     return "".join([c for c in s if c.isdigit() or c.isalpha() or c == " " or c == "-"]).strip()
 
+
+
 class Session():
     def __init__(self, hostname):
         self.req_session = requests.Session()
         self.host = hostname
         self.username = None
         self.password = None
+
 
     def login(self, username, password):
         data = {
@@ -29,11 +33,39 @@ class Session():
         if "<title>Se connecter - PartitionCloud</title>" in r.text:
             raise BaseException("Invalid username/ password")
 
+
     def get_albums(self):
         r = self.req_session.get(f"{self.host}/albums")
         soup = BeautifulSoup(r.content, "html.parser")
         a = soup.find("section", {"id": "albums"}).find_all("a")
         return [Album(i["href"].split("/")[-1], i.text.strip(), self.host) for i in a]
+
+
+    def upload(self, album_id: str, filename: str, name: str, author="", lyrics="") -> requests.models.Response:
+        """Uploads a score with the specified parameters to the album specified by album_id"""
+        data = {
+            "name": name,
+            "author": author,
+            "body": lyrics
+        }
+        files = {
+            'file': open(filename,'rb')
+        }
+        return self.req_session.post(
+            f"{self.host}/albums/{album_id}/add-partition",
+            data=data,
+            files=files
+        )
+
+
+    def create_album(self, name: str):
+        """Creates an album and returns the associated object"""
+        req = self.req_session.post(
+            f"{self.host}/albums/create-album",
+            data={"name": name}
+        )
+        return Album(req.url.split("/")[-1], name, self.host)
+
 
 
 class Album():
@@ -46,6 +78,7 @@ class Album():
             self.name = file_safe_string(name)
         else:
             self.name = None
+
 
     def load_partitions(self, req_session):
         r = req_session.get(f"{self.host}/albums/{self.id}")
@@ -63,13 +96,16 @@ class Album():
                 author = partition_div.find("div", {"class": "partition-author"}).text.strip()
                 self.partitions.append(Partition(id, author, name, self))
 
+
     def update(self, storage_path, req_session):
         os.makedirs(os.path.join(storage_path, self.name), exist_ok=True)
         for partition in self.partitions:
             partition.update(self.host, storage_path, req_session)
 
+
     def __repr__(self):
         return self.name
+
 
 
 class Partition():
@@ -78,6 +114,7 @@ class Partition():
         self.id = id
         self.name = name
         self.author = author
+
 
     def update(self, host, storage_path, req_session):
         path = os.path.join(storage_path, self.album.name, f"{self}.pdf")
@@ -88,6 +125,7 @@ class Partition():
                 with open(path, 'wb') as f:
                     for chunk in r.iter_content(chunk_size=8192):
                         f.write(chunk)
+
 
     def __repr__(self):
         if self.author != "":
@@ -115,18 +153,24 @@ def update_all(config):
 
 
 def __main__():
-    home = str(Path.home())
-    config = configparser.ConfigParser()
-    config_file = os.path.join(home, ".partitioncloud-config")
+    parser = argparse.ArgumentParser(description="CLI for PartitionCloud")
+    parser.add_argument("-c", "--config", dest="config_file", action="store",
+                        default=os.path.join(str(Path.home()), ".partitioncloud-config"),
+                        help="Path to config file (containing credentials etc)")
 
-    if not os.path.exists(config_file):
-        shutil.copyfile(".partitioncloud-config.sample", config_file)
-        print(f"No config file was found, copying default to {config_file}")
+    args = parser.parse_args()
+
+    config = configparser.ConfigParser()
+
+    if not os.path.exists(args.config_file):
+        shutil.copyfile(".partitioncloud-config.sample", args.config_file)
+        print(f"No config file was found, copying default to {args.config_file}")
         print("Modify it for your needs and relaunch this script")
         exit(1)
     
-    config.read(config_file)
+    config.read(args.config_file)
     update_all(config)
+
 
 
 if __name__ == "__main__":

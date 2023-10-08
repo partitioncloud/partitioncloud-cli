@@ -1,7 +1,7 @@
 #!/bin/bash
 
 mkdir -p "$HOME/.local/bin"
-cp partitioncloud-cli.py $HOME/.local/bin/partitioncloud-cli
+cp partitioncloud_cli.py $HOME/.local/bin/partitioncloud-cli
 echo "Script copied to $HOME/.local/bin/partitioncloud-cli"
 
 if [[ "$PATH" != *"$HOME/.local/bin"* ]]; then
