@@ -34,12 +34,35 @@ class Session():
             raise BaseException("Invalid username/ password")
 
 
-    def get_albums(self):
-        r = self.req_session.get(f"{self.host}/albums")
-        soup = BeautifulSoup(r.content, "html.parser")
+    def get_albums(self, content=None):
+        if content is None:
+            r = self.req_session.get(f"{self.host}/albums")
+            content = r.content
+        soup = BeautifulSoup(content, "html.parser")
         a = soup.find("section", {"id": "albums"}).find_all("a")
         return [Album(i["href"].split("/")[-1], i.text.strip(), self.host) for i in a]
 
+
+    def get_groupes(self, content=None):
+        if content is None:
+            r = self.req_session.get(f"{self.host}/albums")
+            content = r.content
+        soup = BeautifulSoup(content, "html.parser")
+        section = soup.find("section", {"id": "groupes"})
+
+        groupes = []
+        for groupe in section.find_all("div", {"class": "groupe-cover"}):
+            header = groupe.find("summary").find("a")
+            name = header.text.strip()
+            uuid = header["href"].split("/")[-1]
+
+            albums_dom = groupe.find("div", {"class": "groupe-albums-cover"})
+            albums = [Album(i["href"].split("/")[-1], i.text.strip(), self.host) for i in albums_dom.find_all("a")]
+
+            groupes.append(Groupe(uuid, name, albums, self.host))
+
+        return groupes
+        
 
     def upload(self, album_id: str, filename: str, name: str, author="", lyrics="") -> requests.models.Response:
         """Uploads a score with the specified parameters to the album specified by album_id"""
@@ -107,6 +130,33 @@ class Album():
         return self.name
 
 
+class Groupe():
+    def __init__(self, id, name, albums, host):
+        self.id = id
+        self.host = host
+        self.albums = albums
+        if name is not None:
+            # Will else be loaded in `self.load_partitions()`
+            self.name = file_safe_string(name)
+        else:
+            self.name = None
+
+
+    def load_partitions(self, req_session):
+        for album in self.albums:
+            album.load_partitions(req_session)
+
+
+    def update(self, storage_path, req_session):
+        dest = os.path.join(storage_path, self.name)
+        os.makedirs(dest, exist_ok=True)
+        for album in self.albums:
+            album.update(dest, req_session)
+
+
+    def __repr__(self):
+        return self.name
+
 
 class Partition():
     def __init__(self, id, author, name, album):
@@ -120,7 +170,7 @@ class Partition():
         path = os.path.join(storage_path, self.album.name, f"{self}.pdf")
         if not os.path.exists(path):
             print(f"Downloading {self.album.name}/{self.name}")
-            with req_session.get(f"{host}/albums/{self.album.id}/{self.id}", stream=True) as r:
+            with req_session.get(f"{host}/partition/{self.id}", stream=True) as r:
                 r.raise_for_status()
                 with open(path, 'wb') as f:
                     for chunk in r.iter_content(chunk_size=8192):
@@ -140,15 +190,26 @@ def update_all(config):
 
     if config["AUTH"]["username"] != "" and config["AUTH"]["username"] is not None:
         session.login(config["AUTH"]["username"], config["AUTH"]["password"])
-        albums = session.get_albums()
+
+        r = session.req_session.get(f"{session.host}/albums")
+        content = r.content
+
+        albums = session.get_albums(content=content)
+        groupes = session.get_groupes(content=content)
     else:
         albums = []
+        groupes = []
 
-    albums.extend([Album(i, None, config["SERVER"]["hostname"]) for i in json.loads(config["AUTH"]["albums"])])
+    if "albums" in config["AUTH"].keys():
+        albums.extend([Album(i, None, config["SERVER"]["hostname"]) for i in json.loads(config["AUTH"]["albums"])])
 
     for album in albums:
         album.load_partitions(session.req_session)
         album.update(config["STORAGE"]["storage-path"], session.req_session)
+
+    for groupe in groupes:
+        groupe.load_partitions(session.req_session)
+        groupe.update(config["STORAGE"]["storage-path"], session.req_session)
 
 
 
