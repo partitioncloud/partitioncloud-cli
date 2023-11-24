@@ -4,7 +4,6 @@ import argparse
 import json
 import os
 import shutil
-import re
 from pathlib import Path
 
 import requests
@@ -109,15 +108,12 @@ class Album():
         if self.name is None:
             self.name = file_safe_string(soup.find("h2", {"id": "album-title"}).text.strip())
 
-        a = soup.find("section", {"id": "partitions-grid"}).find_all("a")
-
-        for partition_div in a:
-            regexp = re.compile(r'\/partition\/[0-9A-Za-z\-]*\/edit')
-            if not regexp.search(partition_div["href"]):
-                id = partition_div["href"].split("/")[-1]
-                name = partition_div.find("div", {"class": "partition-name"}).text.strip()
-                author = partition_div.find("div", {"class": "partition-author"}).text.strip()
-                self.partitions.append(Partition(id, author, name, self))
+        partition_divs = soup.find("section", {"id": "partitions-grid"}).find_all("div", {"class": "partition"})
+        for partition_div in partition_divs:
+            id = "-".join(partition_div["id"].split("-")[1:])
+            name = partition_div.find("div", {"class": "partition-name"}).text.strip()
+            author = partition_div.find("div", {"class": "partition-author"}).text.strip()
+            self.partitions.append(Partition(id, author, name, self))
 
 
     def update(self, storage_path, req_session):
