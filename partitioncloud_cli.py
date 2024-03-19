@@ -1,18 +1,31 @@
 #!/usr/bin/python3
 import configparser
 import argparse
+import requests
+import inspect
+import shutil
 import json
 import os
-import shutil
-from pathlib import Path
 
-import requests
+from pathlib import Path
 from bs4 import BeautifulSoup
 
 
 def file_safe_string(s):
     return "".join([c for c in s if c.isdigit() or c.isalpha() or c == " " or c == "-"]).strip()
 
+
+def curry_function(func):
+    """Curries a function by creating nested functions for each argument."""
+    num_args = len(inspect.signature(func).parameters)
+
+    def curried(*args):
+        if len(args) >= num_args:
+            return func(*args)
+        else:
+            return lambda *next_args: curried(*(args + next_args))
+
+    return curried
 
 
 class Session():
@@ -116,10 +129,9 @@ class Album():
             self.partitions.append(Partition(id, author, name, self))
 
 
-    def update(self, storage_path, req_session):
-        os.makedirs(os.path.join(storage_path, self.name), exist_ok=True)
+    def update(self, storage_path, req_session, file_loc_fun):
         for partition in self.partitions:
-            partition.update(self.host, storage_path, req_session)
+            partition.update(self.host, storage_path, req_session, file_loc_fun(self))
 
 
     def __repr__(self):
@@ -143,11 +155,9 @@ class Groupe():
             album.load_partitions(req_session)
 
 
-    def update(self, storage_path, req_session):
-        dest = os.path.join(storage_path, self.name)
-        os.makedirs(dest, exist_ok=True)
+    def update(self, storage_path, req_session, file_loc_fun):
         for album in self.albums:
-            album.update(dest, req_session)
+            album.update(dest, req_session, file_loc_fun(self))
 
 
     def __repr__(self):
@@ -162,8 +172,9 @@ class Partition():
         self.author = author
 
 
-    def update(self, host, storage_path, req_session):
-        path = os.path.join(storage_path, self.album.name, f"{self}.pdf")
+    def update(self, host, storage_path, req_session, file_loc_fun):
+        path = file_loc_fun(self)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
         if not os.path.exists(path):
             print(f"Downloading {self.album.name}/{self.name}")
             with req_session.get(f"{host}/partition/{self.id}", stream=True) as r:
@@ -180,7 +191,18 @@ class Partition():
 
 
 
-def update_all(config):
+def update_all(config, file_loc_fun=None):
+    def default_file_loc(groupe, album, partition):
+        """Returns the desired path of a partition"""
+        if groupe is not None:
+            return os.path.join(config["STORAGE"]["storage-path"], groupe.name, album.name, f"{partition}.pdf")
+        return os.path.join(config["STORAGE"]["storage-path"], album.name, f"{partition}.pdf")
+
+
+    if file_loc_fun is None:
+        file_loc_fun = default_file_loc
+    file_loc_fun = curry_function(file_loc_fun)
+
     os.makedirs(config["STORAGE"]["storage-path"], exist_ok=True)
     session = Session(config["SERVER"]["hostname"])
 
@@ -201,11 +223,19 @@ def update_all(config):
 
     for album in albums:
         album.load_partitions(session.req_session)
-        album.update(config["STORAGE"]["storage-path"], session.req_session)
+        album.update(
+            config["STORAGE"]["storage-path"],
+            session.req_session,
+            file_loc_fun(None)
+        )
 
     for groupe in groupes:
         groupe.load_partitions(session.req_session)
-        groupe.update(config["STORAGE"]["storage-path"], session.req_session)
+        groupe.update(
+            config["STORAGE"]["storage-path"],
+            session.req_session,
+            file_loc_fun
+        )
 
 
 
