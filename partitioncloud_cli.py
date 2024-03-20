@@ -129,9 +129,9 @@ class Album():
             self.partitions.append(Partition(id, author, name, self))
 
 
-    def update(self, storage_path, req_session, file_loc_fun):
+    def update(self, req_session, file_loc_fun):
         for partition in self.partitions:
-            partition.update(self.host, storage_path, req_session, file_loc_fun(self))
+            partition.update(self.host, req_session, file_loc_fun(self))
 
 
     def __repr__(self):
@@ -155,9 +155,9 @@ class Groupe():
             album.load_partitions(req_session)
 
 
-    def update(self, storage_path, req_session, file_loc_fun):
+    def update(self, req_session, file_loc_fun):
         for album in self.albums:
-            album.update(dest, req_session, file_loc_fun(self))
+            album.update(req_session, file_loc_fun(self))
 
 
     def __repr__(self):
@@ -172,7 +172,7 @@ class Partition():
         self.author = author
 
 
-    def update(self, host, storage_path, req_session, file_loc_fun):
+    def update(self, host, req_session, file_loc_fun):
         path = file_loc_fun(self)
         os.makedirs(os.path.dirname(path), exist_ok=True)
         if not os.path.exists(path):
@@ -224,7 +224,6 @@ def update_all(config, file_loc_fun=None):
     for album in albums:
         album.load_partitions(session.req_session)
         album.update(
-            config["STORAGE"]["storage-path"],
             session.req_session,
             file_loc_fun(None)
         )
@@ -232,7 +231,6 @@ def update_all(config, file_loc_fun=None):
     for groupe in groupes:
         groupe.load_partitions(session.req_session)
         groupe.update(
-            config["STORAGE"]["storage-path"],
             session.req_session,
             file_loc_fun
         )
