@@ -3,6 +3,7 @@ import configparser
 import argparse
 import requests
 import inspect
+import fnmatch
 import shutil
 import json
 import os
@@ -14,6 +15,11 @@ from bs4 import BeautifulSoup
 def file_safe_string(s):
     return "".join([c for c in s if c.isdigit() or c.isalpha() or c == " " or c == "-"]).strip()
 
+NO_CONFIRM = False
+def confirm(text, default=False):
+    if NO_CONFIRM:
+        return default
+    return input(text+" [y/N] ").lower() == "y"
 
 def curry_function(func):
     """Curries a function by creating nested functions for each argument."""
@@ -183,6 +189,38 @@ class Partition():
                     for chunk in r.iter_content(chunk_size=8192):
                         f.write(chunk)
 
+    def get_attachments(self, host, req_session):
+        r = req_session.get(f"{host}/partition/{self.id}/attachments")
+        soup = BeautifulSoup(r.content, "html.parser")
+        attachments_soup = soup.find("div", {"id": "attachments"})
+        if attachments_soup is None:
+            return []
+        
+        attachments = []
+        for att in attachments_soup.find_all("tr"):
+            audio, name = att.find_all("td")
+            link = list(audio.children)[0]["src"]
+            attachments.append({
+                "uuid": link.split("/")[-1].split(".")[0],
+                "ext": link.split("/")[-1].split(".")[1],
+                "title": name.text[2:].strip()
+            })
+
+        return attachments
+
+    def post_attachment(self, filename, name, host, req_session):
+        assert filename.split('.')[-1] in ["mp3", "mid", "midi"]
+        data = {
+            "name": name.strip()
+        }
+        files = {
+            'file': open(filename,'rb')
+        }
+        return req_session.post(
+            f"{host}/partition/{self.id}/add-attachment",
+            data=data,
+            files=files
+        )
 
     def __repr__(self):
         if self.author != "":
@@ -236,16 +274,69 @@ def update_all(config, file_loc_fun=None):
         )
 
 
+def attach_files(config, uuid, files):
+    def determine_name(file):
+        if "ATTACHMENTS_ALIAS" not in config:
+            return file, False
+        
+        for name in config["ATTACHMENTS_ALIAS"]:
+            for pattern in json.loads(config["ATTACHMENTS_ALIAS"][name]):
+                if fnmatch.fnmatch(file, pattern):
+                    return name.capitalize(), True
+
+        return file, False
+
+    partition = Partition(uuid, None, None, None)
+    files_map = []
+    for file in files:
+        name = ".".join(file.split("/")[-1].split(".")[:-1])
+        modified = False
+        if ':' in file:
+            name = ":".join(file.split(":")[1:])
+            file = file.split(":")[0]
+        else:
+            name, modified = determine_name(name)
+        
+        files_map.append((file, name, modified))
+
+    print("\n".join(f"Uploading {file} as {name}" for file, name, _ in files_map))
+    if not confirm("Confirm these names ?", default=True):
+        exit(1)
+
+    if config["AUTH"]["username"] == "" or config["AUTH"]["username"] is None:
+        raise ValueError("Incomplete authentication data")
+
+    session = Session(config["SERVER"]["hostname"])
+    session.login(config["AUTH"]["username"], config["AUTH"]["password"])
+
+    for file, name, _ in files_map:
+        partition.post_attachment(file, name, config["SERVER"]["hostname"], session.req_session)
+
+
 
 def __main__():
-    parser = argparse.ArgumentParser(description="CLI for PartitionCloud")
-    parser.add_argument("-c", "--config", dest="config_file", action="store",
-                        default=os.path.join(str(Path.home()), ".partitioncloud-config"),
-                        help="Path to config file (containing credentials etc)")
+    def parse_args():
+        parser = argparse.ArgumentParser(description="CLI for PartitionCloud")
+        subparsers = parser.add_subparsers(dest="action", help="Available commands")
+        parser.add_argument("-c", "--config", dest="config_file", action="store",
+                            default=os.path.join(str(Path.home()), ".partitioncloud-config"),
+                            help="Path to config file (containing credentials etc)")
+        parser.add_argument("-y", "--yes", dest="no_confirm", action="store_true",
+                            help="Skip confirmations")
 
-    args = parser.parse_args()
+        sync_parser = subparsers.add_parser("sync", help="Sync data from server specified in config")
 
+        attach_parser = subparsers.add_parser("attach", help="Add attachments to partition")
+        attach_parser.add_argument("uuid", type=str, help="Partition uuid")
+        attach_parser.add_argument("files", nargs="+", help="Files to attach (file:name if needed)")
+
+        return parser.parse_args()
+
+    args = parse_args()
     config = configparser.ConfigParser()
+
+    global NO_CONFIRM
+    NO_CONFIRM = args.no_confirm
 
     if not os.path.exists(args.config_file):
         shutil.copyfile(".partitioncloud-config.sample", args.config_file)
@@ -254,7 +345,15 @@ def __main__():
         exit(1)
     
     config.read(args.config_file)
-    update_all(config)
+
+    match args.action:
+        case "sync":
+            update_all(config)
+        case "attach":
+            attach_files(config, args.uuid, args.files)
+        case None:
+            print("You now need to specify an action. Specify `sync` to replicate previous behavior.")
+            exit(1)
 
 
 

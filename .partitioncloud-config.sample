@@ -7,3 +7,5 @@
     albums = ["f4ab565d-4fa7-43a0-8597-6cf1310af95c", "7fc34b40-445f-4678-91cb-f5be6932f6e8"]
 [STORAGE]
     storage-path = /home/my-user/Documents/partitioncloud-files
+[ATTACHMENTS_ALIAS]
+    Piano   = ["*Piano*"]
