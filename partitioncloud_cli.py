@@ -19,7 +19,10 @@ NO_CONFIRM = False
 def confirm(text, default=False):
     if NO_CONFIRM:
         return default
-    return input(text+" [y/N] ").lower() == "y"
+    try:
+        return input(text+" [y/N] ").lower() == "y"
+    except (KeyboardInterrupt, EOFError):
+        exit(1)
 
 def curry_function(func):
     """Curries a function by creating nested functions for each argument."""
@@ -32,6 +35,23 @@ def curry_function(func):
             return lambda *next_args: curried(*(args + next_args))
 
     return curried
+
+def arborescent_file_loc(config, groupe, album, partition):
+    """
+    Returns the desired path of a partition
+    - {groupe}/{album}/{partition name} if any group
+    - {album}/{partition name} otherwise
+    """
+    if groupe is not None:
+        return os.path.join(config["STORAGE"]["storage-path"], groupe.name, album.name, f"{partition}.pdf")
+    return os.path.join(config["STORAGE"]["storage-path"], album.name, f"{partition}.pdf")
+
+def flat_file_loc(config, groupe, album, partition):
+    """
+    Returns the desired path of a partition
+    - case of a flat arborescence
+    """
+    return os.path.join(config["STORAGE"]["storage-path"], f"{partition}.pdf")
 
 
 class Session():
@@ -156,12 +176,25 @@ class Groupe():
             self.name = None
 
 
+    def load_albums(self, req_session):
+        r = req_session.get(f"{self.host}/groupe/{self.id}")
+        soup = BeautifulSoup(r.content, "html.parser")
+        albums_section = soup.find("section", {"id": "albums-grid"})
+        self.albums = [Album(i["href"].split("/")[-1], i.text.strip(), self.host) for i in albums_section.find_all("a")]
+
+
     def load_partitions(self, req_session):
+        if self.albums is None:
+                self.load_albums(req_session)
+
         for album in self.albums:
             album.load_partitions(req_session)
 
 
     def update(self, req_session, file_loc_fun):
+        if self.albums is None:
+                self.load_albums(req_session)
+
         for album in self.albums:
             album.update(req_session, file_loc_fun(self))
 
@@ -229,22 +262,18 @@ class Partition():
 
 
 
-def update_all(config, file_loc_fun=None):
-    def default_file_loc(groupe, album, partition):
-        """Returns the desired path of a partition"""
-        if groupe is not None:
-            return os.path.join(config["STORAGE"]["storage-path"], groupe.name, album.name, f"{partition}.pdf")
-        return os.path.join(config["STORAGE"]["storage-path"], album.name, f"{partition}.pdf")
-
+def update_all(config, file_loc_fun=None, flat=False):
 
     if file_loc_fun is None:
-        file_loc_fun = default_file_loc
-    file_loc_fun = curry_function(file_loc_fun)
+        file_loc_fun = arborescent_file_loc
+        if flat:
+            file_loc_fun = flat_file_loc
+    file_loc_fun = curry_function(file_loc_fun)(config)
 
     os.makedirs(config["STORAGE"]["storage-path"], exist_ok=True)
     session = Session(config["SERVER"]["hostname"])
 
-    if config["AUTH"]["username"] != "" and config["AUTH"]["username"] is not None:
+    if config["AUTH"].get("username", "") != "" and config["AUTH"]["username"] is not None:
         session.login(config["AUTH"]["username"], config["AUTH"]["password"])
 
         r = session.req_session.get(f"{session.host}/albums")
@@ -258,6 +287,9 @@ def update_all(config, file_loc_fun=None):
 
     if "albums" in config["AUTH"].keys():
         albums.extend([Album(i, None, config["SERVER"]["hostname"]) for i in json.loads(config["AUTH"]["albums"])])
+
+    if "groupes" in config["AUTH"].keys():
+        groupes.extend([Groupe(i, None, None, config["SERVER"]["hostname"]) for i in json.loads(config["AUTH"]["groupes"])])
 
     for album in albums:
         album.load_partitions(session.req_session)
@@ -325,6 +357,8 @@ def __main__():
                             help="Skip confirmations")
 
         sync_parser = subparsers.add_parser("sync", help="Sync data from server specified in config")
+        sync_parser.add_argument("--flat", dest="flat", action="store_true",
+                            help="Do not create folders")
 
         attach_parser = subparsers.add_parser("attach", help="Add attachments to partition")
         attach_parser.add_argument("uuid", type=str, help="Partition uuid")
@@ -348,7 +382,7 @@ def __main__():
 
     match args.action:
         case "sync":
-            update_all(config)
+            update_all(config, flat=args.flat)
         case "attach":
             attach_files(config, args.uuid, args.files)
         case None:
