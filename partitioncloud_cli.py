@@ -161,6 +161,9 @@ class Album():
 
 
     def __repr__(self):
+        if self.name is None:
+            raise NotImplementedError("We really want to find the album's name sooner.")
+
         return self.name
 
 
@@ -170,7 +173,7 @@ class Groupe():
         self.host = host
         self.albums = albums
         if name is not None:
-            # Will else be loaded in `self.load_partitions()`
+            # Will else be loaded in `self.load_albums()`
             self.name = file_safe_string(name)
         else:
             self.name = None
@@ -179,6 +182,10 @@ class Groupe():
     def load_albums(self, req_session):
         r = req_session.get(f"{self.host}/groupe/{self.id}")
         soup = BeautifulSoup(r.content, "html.parser")
+
+        if self.name is None:
+            self.name = soup.find("h2", {"id": "groupe-title"}).text.strip()
+
         albums_section = soup.find("section", {"id": "albums-grid"})
         self.albums = [Album(i["href"].split("/")[-1], i.text.strip(), self.host) for i in albums_section.find_all("a")]
 
@@ -200,6 +207,9 @@ class Groupe():
 
 
     def __repr__(self):
+        if self.name is None:
+            raise NotImplementedError("We really want to find the groupe's name sooner.")
+
         return self.name
 
 
