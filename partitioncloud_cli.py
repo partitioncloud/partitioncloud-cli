@@ -6,6 +6,7 @@ import inspect
 import fnmatch
 import shutil
 import json
+import re
 import os
 
 from pathlib import Path
@@ -68,8 +69,8 @@ class Session():
             "password": password
         }
         r = self.req_session.post(f"{self.host}/auth/login", data)
-        if "<title>Se connecter - PartitionCloud</title>" in r.text:
-            raise BaseException("Invalid username/ password")
+        if r.url.endswith("/auth/login"):
+            raise ValueError("Invalid username / password")
 
 
     def get_albums(self, content=None):
@@ -125,7 +126,19 @@ class Session():
             f"{self.host}/albums/create-album",
             data={"name": name}
         )
+        if not re.match(r".*\/albums\/[A-Z0-9]{6}(\/?)$", req.url):
+            raise PermissionError("No album has been created")
         return Album(req.url.split("/")[-1], name, self.host)
+
+    def create_groupe(self, name: str):
+        """Creates a groupe and returns the associated object"""
+        req = self.req_session.post(
+            f"{self.host}/groupe/create-groupe",
+            data={"name": name}
+        )
+        if not re.match(r".*\/groupe\/[A-Z0-9]{6}(\/?)$", req.url):
+            raise PermissionError("No groupe has been created")
+        return Groupe(req.url.split("/")[-1], name, None, self.host)
 
 
 
@@ -206,6 +219,17 @@ class Groupe():
             album.update(req_session, file_loc_fun(self))
 
 
+    def create_album(self, name: str, req_session):
+        """Creates an album and returns the associated object"""
+        req = req_session.post(
+            f"{self.host}/groupe/{self.id}/create-album",
+            data={"name": name}
+        )
+        if not re.match(r".*\/groupe\/[A-Z0-9]{6}\/[A-Z0-9]{6}(\/?)$", req.url):
+            raise PermissionError("No album has been created")
+        return Album(req.url.split("/")[-1], name, self.host)
+
+
     def __repr__(self):
         if self.name is None:
             raise NotImplementedError("We really want to find the groupe's name sooner.")
@@ -259,10 +283,42 @@ class Partition():
         files = {
             'file': open(filename,'rb')
         }
+        # TODO: check result
         return req_session.post(
             f"{host}/partition/{self.id}/add-attachment",
             data=data,
             files=files
+        )
+
+    def post_update(self, name, author, body, filename, host, req_session):
+        data = {
+           "name": name.strip(),
+           "author": author,
+           "body": body
+        }
+        if filename is not None:
+            files = {
+                'file': open(filename,'rb')
+            }
+        else:
+            files = {}
+
+        # TODO: check result
+        return req_session.post(
+            f"{host}/partition/{self.id}/details",
+            data=data,
+            files=files
+        )
+
+    def add_to_album(self, album_uuid, host, req_session):
+        # TODO: check result
+        return req_session.post(
+            f"{host}/albums/add-partition",
+            data={
+                "album-uuid": album_uuid,
+                "partition-uuid": self.id,
+                "partition-type": "local_file"
+            }
         )
 
     def __repr__(self):
