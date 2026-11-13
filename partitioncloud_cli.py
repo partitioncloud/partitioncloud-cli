@@ -54,6 +54,13 @@ def flat_file_loc(config, groupe, album, partition):
     """
     return os.path.join(config["STORAGE"]["storage-path"], f"{partition}.pdf")
 
+def flash_message(response, default):
+    """Returns the reason flashed by the server in a response page, if any"""
+    flash = BeautifulSoup(response.content, "html.parser").find("div", {"class": "flash"})
+    if flash is None:
+        return default
+    return flash.text.strip()
+
 
 class Session():
     def __init__(self, hostname):
@@ -140,6 +147,18 @@ class Session():
             raise PermissionError("No groupe has been created")
         return Groupe(req.url.split("/")[-1], name, None, self.host)
 
+    def delete_attachment(self, attachment_uuid: str):
+        """Deletes an attachment, whatever the partition it belongs to"""
+        r = self.req_session.post(
+            f"{self.host}/partition/attachment/{attachment_uuid}/delete"
+        )
+        # The server may answer 500 instead of 404 for unknown uuids
+        if r.status_code == 404 or r.status_code >= 500:
+            raise LookupError(f"No attachment {attachment_uuid} (HTTP {r.status_code})")
+        # On success, redirect to the partition's details
+        if not r.url.rstrip("/").endswith("/details"):
+            raise PermissionError(flash_message(r, "Attachment was not deleted"))
+
 
 
 class Album():
@@ -164,7 +183,9 @@ class Album():
         for partition_div in partition_divs:
             id = "-".join(partition_div["id"].split("-")[1:])
             name = partition_div.find("div", {"class": "partition-name"}).text.strip()
-            author = partition_div.find("div", {"class": "partition-author"}).text.strip()
+            # The author is not displayed when empty
+            author_div = partition_div.find("div", {"class": "partition-author"})
+            author = author_div.text.strip() if author_div is not None else ""
             self.partitions.append(Partition(id, author, name, self))
 
 
@@ -257,38 +278,58 @@ class Partition():
                         f.write(chunk)
 
     def get_attachments(self, host, req_session):
-        r = req_session.get(f"{host}/partition/{self.id}/attachments")
+        """
+        Lists the attachments of a partition.
+        This needs write access, as it reads the partition's details page.
+        """
+        r = req_session.get(f"{host}/partition/{self.id}/details")
+        # The server may answer 500 instead of 404 for unknown uuids
+        if r.status_code == 404 or r.status_code >= 500:
+            raise LookupError(f"No partition {self.id} (HTTP {r.status_code})")
+        if not r.url.endswith("/details"):
+            raise PermissionError(flash_message(r, "Unable to read the partition's details"))
+
         soup = BeautifulSoup(r.content, "html.parser")
-        attachments_soup = soup.find("div", {"id": "attachments"})
-        if attachments_soup is None:
+        title = soup.find("h3", {"id": "partition-attachments"})
+        table = title.find_next("table") if title is not None else None
+        if table is None:
             return []
-        
+
         attachments = []
-        for att in attachments_soup.find_all("tr"):
-            audio, name = att.find_all("td")
-            link = list(audio.children)[0]["src"]
+        for row in table.find("tbody").find_all("tr"):
+            name, filetype, displayed, actions = row.find_all("td")
+            link = actions.find("a")["href"]
             attachments.append({
                 "uuid": link.split("/")[-1].split(".")[0],
-                "ext": link.split("/")[-1].split(".")[1],
-                "title": name.text[2:].strip()
+                "ext": link.split(".")[-1],
+                "title": name.text.strip(),
+                "is_view": displayed.text.strip() != ""
             })
 
         return attachments
 
-    def post_attachment(self, filename, name, host, req_session):
-        assert filename.split('.')[-1] in ["mp3", "mid", "midi"]
+    def post_attachment(self, filename, name, host, req_session, is_view=False):
+        ext = filename.split('.')[-1].lower()
+        if ext not in ["mp3", "mid", "mscz"]:
+            raise ValueError(f"Unsupported file type: {filename}")
+
         data = {
             "name": name.strip()
         }
-        files = {
-            'file': open(filename,'rb')
-        }
-        # TODO: check result
-        return req_session.post(
-            f"{host}/partition/{self.id}/add-attachment",
-            data=data,
-            files=files
-        )
+        if is_view:
+            data["is-view"] = "on" # sufficient for the server
+
+        with open(filename, 'rb') as file:
+            r = req_session.post(
+                f"{host}/partition/{self.id}/add-attachment",
+                params={"response": "json"},
+                data=data,
+                files={'file': file}
+            )
+
+        if r.headers.get("content-type", "").startswith("application/json"):
+            return r.json()["uuid"]
+        raise PermissionError(flash_message(r, f"Unable to upload {filename}"))
 
     def post_update(self, name, author, body, filename, host, req_session):
         data = {
@@ -372,7 +413,40 @@ def update_all(config, file_loc_fun=None, flat=False):
         )
 
 
-def attach_files(config, uuid, files):
+def login_from_config(config):
+    """Returns a logged in session, as defined in the config file"""
+    if config["AUTH"].get("username", "") == "":
+        raise ValueError("Incomplete authentication data")
+
+    session = Session(config["SERVER"]["hostname"])
+    session.login(config["AUTH"]["username"], config["AUTH"]["password"])
+    return session
+
+
+def list_attachments(config, uuid):
+    session = login_from_config(config)
+    partition = Partition(uuid, None, None, None)
+    attachments = partition.get_attachments(session.host, session.req_session)
+
+    if len(attachments) == 0:
+        print("No attachments")
+    for att in attachments:
+        view = " (displayed)" if att["is_view"] else ""
+        print(f"{att['uuid']}  {att['title']}.{att['ext']}{view}")
+
+
+def remove_attachments(config, uuids):
+    session = login_from_config(config)
+
+    print("\n".join(f"Removing {uuid}" for uuid in uuids))
+    if not confirm("Confirm deletion ?", default=True):
+        exit(1)
+
+    for uuid in uuids:
+        session.delete_attachment(uuid)
+
+
+def attach_files(config, uuid, files, is_view=False):
     def determine_name(file):
         if "ATTACHMENTS_ALIAS" not in config:
             return file, False
@@ -401,14 +475,10 @@ def attach_files(config, uuid, files):
     if not confirm("Confirm these names ?", default=True):
         exit(1)
 
-    if config["AUTH"]["username"] == "" or config["AUTH"]["username"] is None:
-        raise ValueError("Incomplete authentication data")
-
-    session = Session(config["SERVER"]["hostname"])
-    session.login(config["AUTH"]["username"], config["AUTH"]["password"])
+    session = login_from_config(config)
 
     for file, name, _ in files_map:
-        partition.post_attachment(file, name, config["SERVER"]["hostname"], session.req_session)
+        partition.post_attachment(file, name, session.host, session.req_session, is_view)
 
 
 
@@ -429,6 +499,14 @@ def __main__():
         attach_parser = subparsers.add_parser("attach", help="Add attachments to partition")
         attach_parser.add_argument("uuid", type=str, help="Partition uuid")
         attach_parser.add_argument("files", nargs="+", help="Files to attach (file:name if needed)")
+        attach_parser.add_argument("--view", dest="is_view", action="store_true",
+                            help="For mscz files: display them instead of the pdf")
+
+        attachments_parser = subparsers.add_parser("attachments", help="List attachments of a partition")
+        attachments_parser.add_argument("uuid", type=str, help="Partition uuid")
+
+        detach_parser = subparsers.add_parser("detach", help="Remove attachments")
+        detach_parser.add_argument("uuids", nargs="+", help="Attachment uuids (see `attachments`)")
 
         return parser.parse_args()
 
@@ -450,7 +528,11 @@ def __main__():
         case "sync":
             update_all(config, flat=args.flat)
         case "attach":
-            attach_files(config, args.uuid, args.files)
+            attach_files(config, args.uuid, args.files, args.is_view)
+        case "attachments":
+            list_attachments(config, args.uuid)
+        case "detach":
+            remove_attachments(config, args.uuids)
         case None:
             print("You now need to specify an action. Specify `sync` to replicate previous behavior.")
             exit(1)
